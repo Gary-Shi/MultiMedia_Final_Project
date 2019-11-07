@@ -28,7 +28,7 @@ class distLinear(nn.Module):
             WeightNorm.apply(self.L, 'weight', dim=0) #split the weight update component to direction and norm      
 
         if outdim <=200:
-            self.scale_factor = 2; #a fixed scale factor to scale the output of cos value into a reasonably large input for softmax, for to reproduce the result of CUB with ResNet10, use 4. see the issue#31 in the github 
+            self.scale_factor = 2; #a fixed scale factor to scale the output of cos value into a reasonably large input for softmax, for to reproduce the result of CUB with ResNet10, use 4. see the issue#31 in the github
         else:
             self.scale_factor = 10; #in omniglot, a larger scale factor is required to handle >1000 output classes.
 
@@ -47,8 +47,11 @@ class Flatten(nn.Module):
     def __init__(self):
         super(Flatten, self).__init__()
         
-    def forward(self, x):        
-        return x.view(x.size(0), -1)
+    def forward(self, x, return_activation_l1=False):
+        if not return_activation_l1:
+            return x.view(x.size(0), -1)
+        else:
+            return x.view(x.size(0), -1), 0
 
 
 class Linear_fw(nn.Linear): #used in MAML to forward input with fast weight 
@@ -124,12 +127,29 @@ class ConvBlock(nn.Module):
         for layer in self.parametrized_layers:
             init_layer(layer)
 
-        self.trunk = nn.Sequential(*self.parametrized_layers)
+        # self.trunk = nn.Sequential(*self.parametrized_layers)
+        self.trunk = nn.ModuleList(self.parametrized_layers)
 
+    def forward(self, x, return_activation_l1=False):
+        # out = self.trunk(x)
+        # return out
+        for i, module in enumerate(self.trunk):
+            if i == 0: # Conv Layer
+                x = module(x)
+                # print(x.shape)
+                # print(self.C.weight.shape)
+                # print(self.C.bias.shape)
+                activation_l1 = ((x - self.C.bias.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)) /
+                                 (self.C.weight.norm(dim=-1).norm(dim=-1).norm(dim=-1).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+                                      + 1e-6)).norm(p=1) / x.numel()
+            else:
+                x = module(x)
 
-    def forward(self,x):
-        out = self.trunk(x)
-        return out
+        if return_activation_l1:
+            return x, activation_l1
+        else:
+            return x
+
 
 # Simple ResNet Block
 class SimpleBlock(nn.Module):
@@ -173,16 +193,19 @@ class SimpleBlock(nn.Module):
         for layer in self.parametrized_layers:
             init_layer(layer)
 
-    def forward(self, x):
+    def forward(self, x, return_activation_l1=False):
+        activation_l1 = 0
         out = self.C1(x)
+        activation_l1 += (out / (self.C1.weight.norm() + 1e-6)).norm(p=1)
         out = self.BN1(out)
         out = self.relu1(out)
         out = self.C2(out)
+        activation_l1 += (out / (self.C1.weight.norm() + 1e-6)).norm(p=1)
         out = self.BN2(out)
         short_out = x if self.shortcut_type == 'identity' else self.BNshortcut(self.shortcut(x))
         out = out + short_out
         out = self.relu2(out)
-        return out
+        return out, activation_l1
 
 
 
@@ -260,12 +283,22 @@ class ConvNet(nn.Module):
         if flatten:
             trunk.append(Flatten())
 
-        self.trunk = nn.Sequential(*trunk)
+        # self.trunk = nn.Sequential(*trunk)
+        self.trunk = nn.ModuleList(trunk)
         self.final_feat_dim = 1600
 
-    def forward(self,x):
-        out = self.trunk(x)
-        return out
+    def forward(self, x, return_activation_l1=False):
+        # x = self.trunk(x)
+        if return_activation_l1:
+            activation_l1_sum = 0
+            for module in self.trunk:
+                x, activation_l1 = module(x, return_activation_l1=True)
+                activation_l1_sum += activation_l1
+            return x, activation_l1_sum
+        else:
+            for module in self.trunk:
+                x = module(x)
+            return x
 
 class ConvNetNopool(nn.Module): #Relation net use a 4 layer conv with pooling in only first two layers, else no pooling
     def __init__(self, depth):

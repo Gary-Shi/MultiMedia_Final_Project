@@ -36,16 +36,20 @@ def train(base_loader, val_loader, model, optimization, start_epoch, stop_epoch,
             os.makedirs(params.checkpoint_dir)
 
         acc = model.test_loop( val_loader)
+        print('best acc: {}'.format(max_acc))
         if acc > max_acc : #for baseline and baseline++, we don't use validation in default and we let acc = -1, but we allow options to validate with DB index
             print("best model! save...")
             max_acc = acc
-            outfile = os.path.join(params.checkpoint_dir, 'best_model.tar')
+            outfile = os.path.join(params.checkpoint_dir, 'best_model_{}.tar'.format(max_acc))
             torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
 
         if (epoch % params.save_freq==0) or (epoch==stop_epoch-1):
             outfile = os.path.join(params.checkpoint_dir, '{:d}.tar'.format(epoch))
             torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
 
+    print('best acc: {}'.format(max_acc))
+    outfile = os.path.join(params.checkpoint_dir, 'best_model_{}.tar'.format(max_acc))
+    torch.save({'epoch': epoch, 'state': model.state_dict()}, outfile)
     return model
 
 if __name__=='__main__':
@@ -162,6 +166,7 @@ if __name__=='__main__':
         params.checkpoint_dir += '_%dway_%dshot' %( params.train_n_way, params.n_shot)
 
     if not os.path.isdir(params.checkpoint_dir):
+        print(params.checkpoint_dir)
         os.makedirs(params.checkpoint_dir)
 
     start_epoch = params.start_epoch

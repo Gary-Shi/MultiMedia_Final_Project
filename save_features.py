@@ -14,7 +14,7 @@ from methods.protonet import ProtoNet
 from methods.matchingnet import MatchingNet
 from methods.relationnet import RelationNet
 from methods.maml import MAML
-from io_utils import model_dict, parse_args, get_resume_file, get_best_file, get_assigned_file 
+from io_utils import model_dict, parse_args, get_resume_file, get_best_file, get_assigned_file, get_best_file_of_acc
 
 
 def save_features(model, data_loader, outfile ):
@@ -80,6 +80,8 @@ if __name__ == '__main__':
         modelfile   = get_assigned_file(checkpoint_dir,params.save_iter)
 #    elif params.method in ['baseline', 'baseline++'] :
 #        modelfile   = get_resume_file(checkpoint_dir) #comment in 2019/08/03 updates as the validation of baseline/baseline++ is added
+    elif params.best_acc is not 'none':
+        modelfile = get_best_file_of_acc(checkpoint_dir, params.best_acc)
     else:
         modelfile   = get_best_file(checkpoint_dir)
 

@@ -14,8 +14,8 @@ class ProtoNet(MetaTemplate):
         self.loss_fn = nn.CrossEntropyLoss()
 
 
-    def set_forward(self,x,is_feature = False):
-        z_support, z_query  = self.parse_feature(x,is_feature)
+    def set_forward(self,x,is_feature = False, return_activation_l1=False):
+        z_support, z_query, activation_l1  = self.parse_feature(x,is_feature)
 
         z_support   = z_support.contiguous()
         z_proto     = z_support.view(self.n_way, self.n_support, -1 ).mean(1) #the shape of z is [n_data, n_dim]
@@ -23,16 +23,24 @@ class ProtoNet(MetaTemplate):
 
         dists = euclidean_dist(z_query, z_proto)
         scores = -dists
-        return scores
+
+        if return_activation_l1:
+            return scores, activation_l1
+        else:
+            return scores
 
 
-    def set_forward_loss(self, x):
+    def set_forward_loss(self, x, return_activation_l1=False):
         y_query = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query ))
         y_query = Variable(y_query.cuda())
 
-        scores = self.set_forward(x)
+        scores, activation_l1 = self.set_forward(x, return_activation_l1 = True)
+        print(self.loss_fn(scores, y_query), activation_l1)
 
-        return self.loss_fn(scores, y_query )
+        if return_activation_l1:
+            return self.loss_fn(scores, y_query ) + 1. * activation_l1
+        else:
+            return self.loss_fn(scores, y_query )
 
 
 def euclidean_dist( x, y):

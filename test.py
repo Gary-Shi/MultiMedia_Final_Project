@@ -20,7 +20,7 @@ from methods.protonet import ProtoNet
 from methods.matchingnet import MatchingNet
 from methods.relationnet import RelationNet
 from methods.maml import MAML
-from io_utils import model_dict, parse_args, get_resume_file, get_best_file , get_assigned_file
+from io_utils import model_dict, parse_args, get_resume_file, get_best_file , get_assigned_file, get_best_file_of_acc
 
 def feature_evaluation(cl_data_file, model, n_way = 5, n_support = 5, n_query = 15, adaptation = False):
     class_list = cl_data_file.keys()
@@ -102,8 +102,10 @@ if __name__ == '__main__':
     if not params.method in ['baseline', 'baseline++'] : 
         if params.save_iter != -1:
             modelfile   = get_assigned_file(checkpoint_dir,params.save_iter)
+        elif params.best_acc is not 'none':
+            modelfile = get_best_file_of_acc(checkpoint_dir, params.best_acc)
         else:
-            modelfile   = get_best_file(checkpoint_dir)
+            modelfile = get_best_file(checkpoint_dir)
         if modelfile is not None:
             tmp = torch.load(modelfile)
             model.load_state_dict(tmp['state'])

@@ -22,7 +22,7 @@ class MetaTemplate(nn.Module):
         pass
 
     @abstractmethod
-    def set_forward_loss(self, x):
+    def set_forward_loss(self, x, return_activation_l1=False):
         pass
 
     def forward(self,x):
@@ -33,14 +33,15 @@ class MetaTemplate(nn.Module):
         x    = Variable(x.cuda())
         if is_feature:
             z_all = x
+            activation_l1 = 0  # placeholder
         else:
             x           = x.contiguous().view( self.n_way * (self.n_support + self.n_query), *x.size()[2:]) 
-            z_all       = self.feature.forward(x)
+            z_all, activation_l1       = self.feature.forward(x, return_activation_l1=True)
             z_all       = z_all.view( self.n_way, self.n_support + self.n_query, -1)
         z_support   = z_all[:, :self.n_support]
         z_query     = z_all[:, self.n_support:]
 
-        return z_support, z_query
+        return z_support, z_query, activation_l1
 
     def correct(self, x):       
         scores = self.set_forward(x)
@@ -60,10 +61,10 @@ class MetaTemplate(nn.Module):
             if self.change_way:
                 self.n_way  = x.size(0)
             optimizer.zero_grad()
-            loss = self.set_forward_loss( x )
+            loss = self.set_forward_loss(x, False)  # whether to penalize activation_l1
             loss.backward()
             optimizer.step()
-            avg_loss = avg_loss+loss.data[0]
+            avg_loss = avg_loss+loss.item()
 
             if i % print_freq==0:
                 #print(optimizer.state_dict()['param_groups'][0]['lr'])
@@ -109,7 +110,7 @@ class MetaTemplate(nn.Module):
         
         batch_size = 4
         support_size = self.n_way* self.n_support
-        for epoch in range(100):
+        for epoch in range(100):  # 100 is part of the whole set. set 600 to run on the whole set. # Issue 17
             rand_id = np.random.permutation(support_size)
             for i in range(0, support_size , batch_size):
                 set_optimizer.zero_grad()
