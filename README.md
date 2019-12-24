@@ -1,3 +1,11 @@
+# MultiMedia Final Project
+
+This repo is based on the original repo of 'A Closer Look at Few-shot Classification'
+
+Following is the original README.
+
+
+
 # A Closer Look at Few-shot Classification
 
 This repo contains the reference source code for the paper [A Closer Look at Few-shot Classification](https://openreview.net/pdf?id=HkxLXnAcFQ) in International Conference on Learning Representations (ICLR 2019). In this project, we provide a integrated testbed for a detailed empirical study for few-shot classification.
