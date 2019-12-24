@@ -35,10 +35,10 @@ class ProtoNet(MetaTemplate):
         y_query = Variable(y_query.cuda())
 
         scores, activation_l1 = self.set_forward(x, return_activation_l1 = True)
-        print(self.loss_fn(scores, y_query), activation_l1)
+        # print(self.loss_fn(scores, y_query), activation_l1)
 
         if return_activation_l1:
-            return self.loss_fn(scores, y_query ) + 1. * activation_l1
+            return self.loss_fn(scores, y_query ) + 0.01 * activation_l1
         else:
             return self.loss_fn(scores, y_query )
 

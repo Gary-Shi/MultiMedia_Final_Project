@@ -92,7 +92,7 @@ class MetaTemplate(nn.Module):
 
     def set_forward_adaptation(self, x, is_feature = True): #further adaptation, default is fixing feature and train a new softmax clasifier
         assert is_feature == True, 'Feature is fixed in further adaptation'
-        z_support, z_query  = self.parse_feature(x,is_feature)
+        z_support, z_query, _  = self.parse_feature(x,is_feature)
 
         z_support   = z_support.contiguous().view(self.n_way* self.n_support, -1 )
         z_query     = z_query.contiguous().view(self.n_way* self.n_query, -1 )

@@ -49,6 +49,8 @@ if __name__ == '__main__':
 
     acc_all = []
 
+    random.seed(1024)  # fix random seed
+    np.random.seed(1024)
     iter_num = 600
 
     few_shot_params = dict(n_way = params.test_n_way , n_support = params.n_shot) 
@@ -108,7 +110,7 @@ if __name__ == '__main__':
             modelfile = get_best_file(checkpoint_dir)
         if modelfile is not None:
             tmp = torch.load(modelfile)
-            model.load_state_dict(tmp['state'])
+            model.load_state_dict(tmp['state'], strict=False)
 
     split = params.split
     if params.save_iter != -1:
@@ -124,13 +126,18 @@ if __name__ == '__main__':
         else:
             image_size = 224
 
-        datamgr         = SetDataManager(image_size, n_eposide = iter_num, n_query = 15 , **few_shot_params)
+        datamgr         = SetDataManager(image_size, n_episode = iter_num, n_query = 15 , **few_shot_params)
         
         if params.dataset == 'cross':
             if split == 'base':
                 loadfile = configs.data_dir['miniImagenet'] + 'all.json' 
             else:
                 loadfile   = configs.data_dir['CUB'] + split +'.json'
+        elif params.dataset == 'cross_inv':
+            if split == 'base':
+                loadfile = configs.data_dir['CUB'] + split + '.json'
+            else:
+                loadfile = configs.data_dir['miniImagenet'] + split + '.json'
         elif params.dataset == 'cross_char':
             if split == 'base':
                 loadfile = configs.data_dir['omniglot'] + 'noLatin.json' 

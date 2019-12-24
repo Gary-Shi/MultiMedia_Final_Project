@@ -104,13 +104,74 @@ class BatchNorm2d_fw(nn.BatchNorm2d): #used in MAML to forward input with fast w
             out = F.batch_norm(x, running_mean, running_var, self.weight, self.bias, training = True, momentum = 1)
         return out
 
+def random_sample(prob, sampling_num):
+    batch_size, channels, h, w = prob.shape
+    return torch.multinomial((prob.view(batch_size * channels, -1) + 1e-8), sampling_num, replacement=True)
+
+dropout_layers = 2
+
+class Info_Dropout(nn.Module):
+    def __init__(self, indim, outdim, kernel_size, stride=1, padding=0,
+                 dilation=1, groups=1, if_pool=False, pool_kernel_size=2, pool_stride=None,
+                 pool_padding=0, pool_dilation=1):
+        super(Info_Dropout, self).__init__()
+        self.indim = indim
+        self.outdim = outdim
+        self.if_pool = if_pool
+        self.drop_rate = 0.1
+        self.temperature = 0.03
+        self.radius = 3
+
+        # build all-ones conv_kernel for computing mean of x_old
+        self.all_one_conv_old = nn.Conv2d(indim, indim, kernel_size=self.radius * 2 + 1,
+                                          padding=self.radius, groups=indim, bias=False)
+        self.all_one_conv_old.weight.data = torch.ones_like(self.all_one_conv_old.weight, dtype=torch.float)
+        self.all_one_conv_old.weight.requires_grad = False
+
+        # build a all-ones conv_kernel for computing norm of x
+        self.all_one_conv_norm = nn.Conv2d(indim, outdim, kernel_size, stride, padding,
+                                           dilation, groups, bias=False)
+        self.all_one_conv_norm.weight.data = torch.ones_like(self.all_one_conv_norm.weight, dtype=torch.float)
+        self.all_one_conv_norm.weight.requires_grad = False
+
+        if if_pool:
+            self.pool = nn.MaxPool2d(pool_kernel_size, pool_stride, pool_padding, pool_dilation)
+
+    def forward(self, x_old, x):
+        with torch.no_grad():
+            mean_old = self.all_one_conv_old(x_old) / (self.radius * 2 + 1) ** 2
+            power_2_old = self.all_one_conv_old(x_old.pow(2)) / (self.radius * 2 + 1) ** 2
+            distance_old = self.all_one_conv_norm((x_old - mean_old).pow(2) - mean_old.pow(2) + power_2_old)
+            prob = torch.exp(-distance_old / (distance_old.max(dim=-1, keepdim=True)[0].max(dim=-2, keepdim=True)[0] + 1e-6) / self.temperature)
+            if self.if_pool:
+                prob = -self.pool(-prob)  # min pooling of probability
+            prob /= prob.sum(dim=(-2, -1), keepdim=True)
+
+            batch_size, channels, h, w = x.shape
+
+            if not self.training:
+                # print(torch.exp(-self.drop_rate * prob * h * w).max(dim=-1)[0].max(dim=-1)[0].mean(),
+                #       torch.exp(-self.drop_rate * prob * h * w).min(dim=-1)[0].min(dim=-1)[0].mean())
+                return x * torch.exp(-self.drop_rate * prob * h * w)
+
+            random_choice = random_sample(prob, sampling_num=int(self.drop_rate * h * w))
+
+            random_mask = torch.ones((batch_size * channels, h * w), device='cuda:0')
+            random_mask[torch.arange(batch_size * channels, device='cuda:0').view(-1, 1), random_choice] = 0
+
+
+        return x * random_mask.view(x.shape)
+
+
 # Simple Conv Block
 class ConvBlock(nn.Module):
     maml = False #Default
-    def __init__(self, indim, outdim, pool = True, padding = 1):
+    def __init__(self, indim, outdim, pool = True, padding = 1, if_dropout = False):
         super(ConvBlock, self).__init__()
         self.indim  = indim
         self.outdim = outdim
+        self.if_dropout = if_dropout
+        self.if_pool = pool
         if self.maml:
             self.C      = Conv2d_fw(indim, outdim, 3, padding = padding)
             self.BN     = BatchNorm2d_fw(outdim)
@@ -119,10 +180,22 @@ class ConvBlock(nn.Module):
             self.BN     = nn.BatchNorm2d(outdim)
         self.relu   = nn.ReLU(inplace=True)
 
+        # if if_dropout:
+        #     self.info_dropout = Info_Dropout(indim, outdim, 3, padding=padding)
+        #     self.parametrized_layers = [self.C, self.BN, self.relu, self.info_dropout]
+        # else:
+        #     self.parametrized_layers = [self.C, self.BN, self.relu]
+
         self.parametrized_layers = [self.C, self.BN, self.relu]
+
         if pool:
             self.pool   = nn.MaxPool2d(2)
             self.parametrized_layers.append(self.pool)
+
+        if if_dropout:
+            self.info_dropout = Info_Dropout(indim, outdim, 3, padding=padding, if_pool=pool)
+            # self.info_dropout = nn.Dropout(0.1)
+            self.parametrized_layers.append(self.info_dropout)
 
         for layer in self.parametrized_layers:
             init_layer(layer)
@@ -130,23 +203,29 @@ class ConvBlock(nn.Module):
         # self.trunk = nn.Sequential(*self.parametrized_layers)
         self.trunk = nn.ModuleList(self.parametrized_layers)
 
+        # build a all-ones conv_kernel for computing norm of x
+        self.all_one_conv = nn.Conv2d(indim, outdim, 3, padding=padding, bias=False)
+        self.all_one_conv.weight.data = torch.ones_like(self.C.weight, dtype=torch.float)
+        self.all_one_conv.weight.requires_grad = False
+
     def forward(self, x, return_activation_l1=False):
         # out = self.trunk(x)
         # return out
+        x_old = x.clone()
         for i, module in enumerate(self.trunk):
-            if i == 0: # Conv Layer
-                x = module(x)
-                # print(x.shape)
-                # print(self.C.weight.shape)
-                # print(self.C.bias.shape)
-                activation_l1 = ((x - self.C.bias.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)) /
-                                 (self.C.weight.norm(dim=-1).norm(dim=-1).norm(dim=-1).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
-                                      + 1e-6)).norm(p=1) / x.numel()
+            if self.if_dropout: # Info_Dropout Layer
+                if self.if_pool and i == 4:
+                    x = module(x_old, x)
+                elif (not self.if_pool) and i == 3:
+                    x = module(x_old, x)
+                else:
+                    x = module(x)
             else:
                 x = module(x)
+            # x = module(x)
 
         if return_activation_l1:
-            return x, activation_l1
+            return x, 0
         else:
             return x
 
@@ -154,10 +233,11 @@ class ConvBlock(nn.Module):
 # Simple ResNet Block
 class SimpleBlock(nn.Module):
     maml = False #Default
-    def __init__(self, indim, outdim, half_res):
+    def __init__(self, indim, outdim, half_res, if_dropout=False):
         super(SimpleBlock, self).__init__()
         self.indim = indim
         self.outdim = outdim
+        self.if_dropout = if_dropout
         if self.maml:
             self.C1 = Conv2d_fw(indim, outdim, kernel_size=3, stride=2 if half_res else 1, padding=1, bias=False)
             self.BN1 = BatchNorm2d_fw(outdim)
@@ -170,6 +250,10 @@ class SimpleBlock(nn.Module):
             self.BN2 = nn.BatchNorm2d(outdim)
         self.relu1 = nn.ReLU(inplace=True)
         self.relu2 = nn.ReLU(inplace=True)
+
+        if if_dropout:
+            self.info_dropout1 = Info_Dropout(indim, outdim, kernel_size=3, stride=2 if half_res else 1, padding=1)
+            self.info_dropout2 = Info_Dropout(outdim, outdim,kernel_size=3, padding=1)
 
         self.parametrized_layers = [self.C1, self.C2, self.BN1, self.BN2]
 
@@ -194,19 +278,26 @@ class SimpleBlock(nn.Module):
             init_layer(layer)
 
     def forward(self, x, return_activation_l1=False):
-        activation_l1 = 0
+        x_old = x.clone()
         out = self.C1(x)
-        activation_l1 += (out / (self.C1.weight.norm() + 1e-6)).norm(p=1)
         out = self.BN1(out)
         out = self.relu1(out)
+        if self.if_dropout:
+            out = self.info_dropout1(x_old, out)
+
+        x_old = out.clone()
         out = self.C2(out)
-        activation_l1 += (out / (self.C1.weight.norm() + 1e-6)).norm(p=1)
         out = self.BN2(out)
         short_out = x if self.shortcut_type == 'identity' else self.BNshortcut(self.shortcut(x))
         out = out + short_out
         out = self.relu2(out)
-        return out, activation_l1
+        if self.if_dropout:
+            out = self.info_dropout2(x_old, out)
 
+        if return_activation_l1:
+            return out, 0
+        else:
+            return out
 
 
 # Bottleneck block
@@ -271,33 +362,33 @@ class BottleneckBlock(nn.Module):
 
 
 class ConvNet(nn.Module):
-    def __init__(self, depth, flatten = True):
+    def __init__(self, depth, flatten = True, pool=True):
         super(ConvNet,self).__init__()
         trunk = []
         for i in range(depth):
             indim = 3 if i == 0 else 64
             outdim = 64
-            B = ConvBlock(indim, outdim, pool = ( i <4 ) ) #only pooling for fist 4 layers
+            B = ConvBlock(indim, outdim, pool = ( i <4 ), if_dropout=(i < dropout_layers) ) #only pooling for fist 4 layers
             trunk.append(B)
 
+        trunk.append(nn.AvgPool2d(5))
         if flatten:
             trunk.append(Flatten())
 
         # self.trunk = nn.Sequential(*trunk)
         self.trunk = nn.ModuleList(trunk)
-        self.final_feat_dim = 1600
+        # self.final_feat_dim = 1600
+        if pool:
+            self.final_feat_dim = 64
+        else:
+            self.final_feat_dim = 1600
 
     def forward(self, x, return_activation_l1=False):
-        # x = self.trunk(x)
+        for module in self.trunk:
+            x = module(x)
         if return_activation_l1:
-            activation_l1_sum = 0
-            for module in self.trunk:
-                x, activation_l1 = module(x, return_activation_l1=True)
-                activation_l1_sum += activation_l1
-            return x, activation_l1_sum
+            return x, 0
         else:
-            for module in self.trunk:
-                x = module(x)
             return x
 
 class ConvNetNopool(nn.Module): #Relation net use a 4 layer conv with pooling in only first two layers, else no pooling
@@ -307,15 +398,18 @@ class ConvNetNopool(nn.Module): #Relation net use a 4 layer conv with pooling in
         for i in range(depth):
             indim = 3 if i == 0 else 64
             outdim = 64
-            B = ConvBlock(indim, outdim, pool = ( i in [0,1] ), padding = 0 if i in[0,1] else 1  ) #only first two layer has pooling and no padding
+            B = ConvBlock(indim, outdim, pool = ( i in [0,1] ), padding = 0 if i in[0,1] else 1, if_dropout=(i < dropout_layers)  ) #only first two layer has pooling and no padding
             trunk.append(B)
 
         self.trunk = nn.Sequential(*trunk)
         self.final_feat_dim = [64,19,19]
 
-    def forward(self,x):
+    def forward(self,x, return_activation_l1=False):
         out = self.trunk(x)
-        return out
+        if return_activation_l1:
+            return out, 0
+        else:
+            return out
 
 class ConvNetS(nn.Module): #For omniglot, only 1 input channel, output dim is 64
     def __init__(self, depth, flatten = True):
@@ -364,23 +458,25 @@ class ResNet(nn.Module):
         super(ResNet,self).__init__()
         assert len(list_of_num_layers)==4, 'Can have only four stages'
         if self.maml:
-            conv1 = Conv2d_fw(3, 64, kernel_size=7, stride=2, padding=3,
+            self.conv1 = Conv2d_fw(3, 64, kernel_size=7, stride=2, padding=3,
                                                bias=False)
-            bn1 = BatchNorm2d_fw(64)
+            self.bn1 = BatchNorm2d_fw(64)
         else:
-            conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+            self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
                                                bias=False)
-            bn1 = nn.BatchNorm2d(64)
+            self.bn1 = nn.BatchNorm2d(64)
 
-        relu = nn.ReLU()
-        pool1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.relu = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        if dropout_layers > 0:
+            self.info_dropout = Info_Dropout(3, 64, kernel_size=7, stride=2, padding=3, if_pool=True,
+                                             pool_kernel_size=3, pool_stride=2, pool_padding=1)
 
-        init_layer(conv1)
-        init_layer(bn1)
+        init_layer(self.conv1)
+        init_layer(self.bn1)
 
 
-        trunk = [conv1, bn1, relu, pool1]
-
+        trunk = []
         indim = 64
         for i in range(4):
 
@@ -400,9 +496,20 @@ class ResNet(nn.Module):
 
         self.trunk = nn.Sequential(*trunk)
 
-    def forward(self,x):
+    def forward(self,x, return_activation_l1=False):
+        x_old = x.clone()
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.pool1(x)
+        if dropout_layers > 0:
+            x = self.info_dropout(x_old, x)
         out = self.trunk(x)
-        return out
+
+        if return_activation_l1:
+            return out, 0
+        else:
+            return out
 
 def Conv4():
     return ConvNet(4)

@@ -24,7 +24,9 @@ class TransformLoader:
         if transform_type=='RandomSizedCrop':
             return method(self.image_size) 
         elif transform_type=='CenterCrop':
-            return method(self.image_size) 
+            return method(self.image_size)
+        elif transform_type=='RandomCrop':
+            return method(self.image_size)
         elif transform_type=='Scale':
             return method([int(self.image_size*1.15), int(self.image_size*1.15)])
         elif transform_type=='Normalize':
@@ -34,7 +36,10 @@ class TransformLoader:
 
     def get_composed_transform(self, aug = False):
         if aug:
-            transform_list = ['RandomSizedCrop', 'ImageJitter', 'RandomHorizontalFlip', 'ToTensor', 'Normalize']
+            # transform_list = ['RandomSizedCrop', 'ImageJitter', 'RandomHorizontalFlip', 'ToTensor', 'Normalize']
+            # transform_list = ['Scale','CenterCrop', 'ImageJitter', 'RandomHorizontalFlip', 'ToTensor', 'Normalize']
+            transform_list = ['Scale', 'RandomCrop', 'ImageJitter', 'RandomHorizontalFlip', 'ToTensor', 'Normalize']
+            # transform_list = ['RandomSizedCrop', 'RandomHorizontalFlip', 'ToTensor', 'Normalize']
         else:
             transform_list = ['Scale','CenterCrop', 'ToTensor', 'Normalize']
 
@@ -63,12 +68,12 @@ class SimpleDataManager(DataManager):
         return data_loader
 
 class SetDataManager(DataManager):
-    def __init__(self, image_size, n_way, n_support, n_query, n_eposide =100):        
+    def __init__(self, image_size, n_way, n_support, n_query, n_episode =100):
         super(SetDataManager, self).__init__()
         self.image_size = image_size
         self.n_way = n_way
         self.batch_size = n_support + n_query
-        self.n_eposide = n_eposide
+        self.n_eposide = n_episode
 
         self.trans_loader = TransformLoader(image_size)
 

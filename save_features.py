@@ -61,7 +61,12 @@ if __name__ == '__main__':
         if split == 'base':
             loadfile = configs.data_dir['miniImagenet'] + 'all.json' 
         else:
-            loadfile   = configs.data_dir['CUB'] + split +'.json' 
+            loadfile   = configs.data_dir['CUB'] + split +'.json'
+    elif params.dataset == 'cross_inv':
+        if split == 'base':
+            loadfile = configs.data_dir['CUB'] + split + '.json'
+        else:
+            loadfile = configs.data_dir['miniImagenet'] + split + '.json'
     elif params.dataset == 'cross_char':
         if split == 'base':
             loadfile = configs.data_dir['omniglot'] + 'noLatin.json' 
@@ -118,7 +123,7 @@ if __name__ == '__main__':
         else:
             state.pop(key)
             
-    model.load_state_dict(state)
+    model.load_state_dict(state, strict=False)
     model.eval()
 
     dirname = os.path.dirname(outfile)

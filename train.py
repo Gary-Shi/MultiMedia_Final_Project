@@ -7,6 +7,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 import time
 import os
 import glob
+import random
 
 import configs
 import backbone
@@ -17,11 +18,15 @@ from methods.protonet import ProtoNet
 from methods.matchingnet import MatchingNet
 from methods.relationnet import RelationNet
 from methods.maml import MAML
-from io_utils import model_dict, parse_args, get_resume_file  
+from io_utils import model_dict, parse_args, get_resume_file, get_resume_file_of_acc
+
+random_num_for_saving = random.randint(0, 10000) / 100000000
 
 def train(base_loader, val_loader, model, optimization, start_epoch, stop_epoch, params):    
     if optimization == 'Adam':
         optimizer = torch.optim.Adam(model.parameters())
+        # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=1,
+        #                                                 epochs=stop_epoch - start_epoch)
     else:
        raise ValueError('Unknown optimization, please define by yourself')
 
@@ -29,37 +34,44 @@ def train(base_loader, val_loader, model, optimization, start_epoch, stop_epoch,
 
     for epoch in range(start_epoch,stop_epoch):
         model.train()
-        model.train_loop(epoch, base_loader,  optimizer ) #model are called by reference, no need to return 
+        model.train_loop(epoch, base_loader,  optimizer ) #model are called by reference, no need to return
+        # scheduler.step()
         model.eval()
 
         if not os.path.isdir(params.checkpoint_dir):
             os.makedirs(params.checkpoint_dir)
 
-        acc = model.test_loop( val_loader)
-        print('best acc: {}'.format(max_acc))
-        if acc > max_acc : #for baseline and baseline++, we don't use validation in default and we let acc = -1, but we allow options to validate with DB index
-            print("best model! save...")
-            max_acc = acc
-            outfile = os.path.join(params.checkpoint_dir, 'best_model_{}.tar'.format(max_acc))
-            torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
+        if (epoch + 1) % 10 == 0:
+            acc = model.test_loop( val_loader)
+            print('best acc: {}'.format(max_acc))
+            if acc > max_acc : #for baseline and baseline++, we don't use validation in default and we let acc = -1, but we allow options to validate with DB index
+                print("best model! save...")
+                max_acc = acc
+                outfile = os.path.join(params.checkpoint_dir, 'best_model_{}.tar'.format(max_acc))
+                torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
 
         if (epoch % params.save_freq==0) or (epoch==stop_epoch-1):
             outfile = os.path.join(params.checkpoint_dir, '{:d}.tar'.format(epoch))
             torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
 
+    max_acc += random_num_for_saving
     print('best acc: {}'.format(max_acc))
     outfile = os.path.join(params.checkpoint_dir, 'best_model_{}.tar'.format(max_acc))
     torch.save({'epoch': epoch, 'state': model.state_dict()}, outfile)
     return model
 
 if __name__=='__main__':
-    np.random.seed(10)
+    np.random.seed(1024)
+    random.seed(1024)
     params = parse_args('train')
 
 
     if params.dataset == 'cross':
         base_file = configs.data_dir['miniImagenet'] + 'all.json' 
-        val_file   = configs.data_dir['CUB'] + 'val.json' 
+        val_file   = configs.data_dir['CUB'] + 'val.json'
+    elif params.dataset == 'cross_inv':
+        base_file = configs.data_dir['CUB'] + 'base.json'
+        val_file = configs.data_dir['miniImagenet'] + 'val.json'
     elif params.dataset == 'cross_char':
         base_file = configs.data_dir['omniglot'] + 'noLatin.json' 
         val_file   = configs.data_dir['emnist'] + 'val.json' 
@@ -123,7 +135,7 @@ if __name__=='__main__':
         base_datamgr            = SetDataManager(image_size, n_query = n_query,  **train_few_shot_params)
         base_loader             = base_datamgr.get_data_loader( base_file , aug = params.train_aug )
          
-        test_few_shot_params     = dict(n_way = params.test_n_way, n_support = params.n_shot) 
+        test_few_shot_params     = dict(n_way = params.test_n_way, n_support = params.n_shot, n_episode = 300)  # val 300 times
         val_datamgr             = SetDataManager(image_size, n_query = n_query, **test_few_shot_params)
         val_loader              = val_datamgr.get_data_loader( val_file, aug = False) 
         #a batch for SetDataManager: a [n_way, n_support + n_query, dim, w, h] tensor        
@@ -176,6 +188,12 @@ if __name__=='__main__':
 
     if params.resume:
         resume_file = get_resume_file(params.checkpoint_dir)
+        if resume_file is not None:
+            tmp = torch.load(resume_file)
+            start_epoch = tmp['epoch']+1
+            model.load_state_dict(tmp['state'])
+    elif params.resume_acc is not 'none':
+        resume_file = get_resume_file_of_acc(params.checkpoint_dir, params.resume_acc)
         if resume_file is not None:
             tmp = torch.load(resume_file)
             start_epoch = tmp['epoch']+1

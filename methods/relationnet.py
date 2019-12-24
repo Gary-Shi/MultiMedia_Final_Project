@@ -21,8 +21,8 @@ class RelationNet(MetaTemplate):
         else:
             self.loss_fn = nn.CrossEntropyLoss()
 
-    def set_forward(self,x,is_feature = False):
-        z_support, z_query  = self.parse_feature(x,is_feature)
+    def set_forward(self,x,is_feature = False, return_activation_l1=False):
+        z_support, z_query, activation_l1  = self.parse_feature(x,is_feature)
 
         z_support   = z_support.contiguous()
         z_proto     = z_support.view( self.n_way, self.n_support, *self.feat_dim ).mean(1) 
@@ -37,7 +37,10 @@ class RelationNet(MetaTemplate):
         relation_pairs = torch.cat((z_proto_ext,z_query_ext),2).view(-1, *extend_final_feat_dim)
         relations = self.relation_module(relation_pairs).view(-1, self.n_way)
 
-        return relations
+        if return_activation_l1:
+            return relations, activation_l1
+        else:
+            return relations
 
     def set_forward_adaptation(self,x,is_feature = True): #overwrite parent function
         assert is_feature == True, 'Finetune only support fixed feature' 
@@ -91,18 +94,25 @@ class RelationNet(MetaTemplate):
 
         self.relation_module.load_state_dict(relation_module_clone.state_dict())
         return relations
-    def set_forward_loss(self, x):
+    def set_forward_loss(self, x, return_activation_l1=False):
         y = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query ))
 
-        scores = self.set_forward(x)
+        scores, activation_l1 = self.set_forward(x, return_activation_l1 = True)
         if self.loss_type == 'mse':
             y_oh = utils.one_hot(y, self.n_way)
             y_oh = Variable(y_oh.cuda())            
 
-            return self.loss_fn(scores, y_oh )
+            if return_activation_l1:
+                return self.loss_fn(scores, y_oh ) + 0.01 * activation_l1
+            else:
+                return self.loss_fn(scores, y_oh )
         else:
             y = Variable(y.cuda())
-            return self.loss_fn(scores, y )
+
+            if return_activation_l1:
+                return self.loss_fn(scores, y ) + 0.01 * activation_l1
+            else:
+                return self.loss_fn(scores, y)
 
 class RelationConvBlock(nn.Module):
     def __init__(self, indim, outdim, padding = 0):

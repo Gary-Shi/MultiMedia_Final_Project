@@ -16,7 +16,7 @@ model_dict = dict(
 
 def parse_args(script):
     parser = argparse.ArgumentParser(description= 'few-shot script %s' %(script))
-    parser.add_argument('--dataset'     , default='CUB',        help='CUB/miniImagenet/cross/omniglot/cross_char')
+    parser.add_argument('--dataset'     , default='CUB',        help='CUB/miniImagenet/cross/cross_inv/omniglot/cross_char')
     parser.add_argument('--model'       , default='Conv4',      help='model: Conv{4|6} / ResNet{10|18|34|50|101}') # 50 and 101 are not used in the paper
     parser.add_argument('--method'      , default='baseline',   help='baseline/baseline++/protonet/matchingnet/relationnet{_softmax}/maml{_approx}') #relationnet_softmax replace L2 norm with softmax to expedite training, maml_approx use first-order approximation in the gradient for efficiency
     parser.add_argument('--train_n_way' , default=5, type=int,  help='class num to classify for training') #baseline and baseline++ would ignore this parameter
@@ -30,6 +30,7 @@ def parse_args(script):
         parser.add_argument('--start_epoch' , default=0, type=int,help ='Starting epoch')
         parser.add_argument('--stop_epoch'  , default=-1, type=int, help ='Stopping epoch') #for meta-learning methods, each epoch contains 100 episodes. The default epoch number is dataset dependent. See train.py
         parser.add_argument('--resume'      , action='store_true', help='continue from previous trained model with largest epoch')
+        parser.add_argument('--resume_acc'  , default='none', help = 'accuracy of the model you want to continue training from.')
         parser.add_argument('--warmup'      , action='store_true', help='continue from baseline, neglected if resume is true') #never used in the paper
     elif script == 'save_features':
         parser.add_argument('--split'       , default='novel', help='base/val/novel') #default novel, but you can also test base/val class accuracy if you want 
@@ -62,6 +63,14 @@ def get_resume_file(checkpoint_dir):
     resume_file = os.path.join(checkpoint_dir, '{:d}.tar'.format(max_epoch))
     return resume_file
 
+def get_resume_file_of_acc(checkpoint_dir, resume_acc):
+    resume_file = os.path.join(checkpoint_dir, 'best_model_{}.tar'.format(resume_acc))
+    if os.path.isfile(resume_file):
+        return resume_file
+    else:
+        print('{}: Model File Not Exist!'.format(resume_file))
+        exit(0)
+
 def get_best_file(checkpoint_dir):    
     best_file = os.path.join(checkpoint_dir, 'best_model.tar')
     if os.path.isfile(best_file):
@@ -74,5 +83,5 @@ def get_best_file_of_acc(checkpoint_dir, best_acc):
     if os.path.isfile(best_file):
         return best_file
     else:
-        print('Model File Not Exist!')
+        print('{}: Model File Not Exist!'.format(best_file))
         exit(0)

@@ -44,8 +44,8 @@ class MatchingNet(MetaTemplate):
         logprobs =(softmax.mm(Y_S)+1e-6).log()
         return logprobs
 
-    def set_forward(self, x, is_feature = False):
-        z_support, z_query  = self.parse_feature(x,is_feature)
+    def set_forward(self, x, is_feature = False, return_activation_l1=False):
+        z_support, z_query, activation_l1  = self.parse_feature(x,is_feature)
 
         z_support   = z_support.contiguous().view( self.n_way* self.n_support, -1 )
         z_query     = z_query.contiguous().view( self.n_way* self.n_query, -1 )
@@ -55,15 +55,22 @@ class MatchingNet(MetaTemplate):
         Y_S         = Variable( utils.one_hot(y_s, self.n_way ) ).cuda()
         f           = z_query
         logprobs = self.get_logprobs(f, G, G_normalized, Y_S)
-        return logprobs
 
-    def set_forward_loss(self, x):
+        if return_activation_l1:
+            return logprobs, activation_l1
+        else:
+            return logprobs
+
+    def set_forward_loss(self, x, return_activation_l1=False):
         y_query = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query ))
         y_query = Variable(y_query.cuda())
 
-        logprobs = self.set_forward(x)
+        logprobs, activation_l1 = self.set_forward(x, return_activation_l1=True)
 
-        return self.loss_fn(logprobs, y_query )
+        if return_activation_l1:
+            return self.loss_fn(logprobs, y_query ) + 0.01 * activation_l1
+        else:
+            return self.loss_fn(logprobs, y_query)
 
     def cuda(self):
         super(MatchingNet, self).cuda()
